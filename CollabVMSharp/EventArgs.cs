@@ -52,6 +52,7 @@ public class RectEventArgs {
 public enum VoteStatus {
     Started,
     Update,
+    None,
 }
 
 public class GetIPTask {

@@ -35,12 +35,17 @@ public class CollabVMClient {
     private Image framebuffer;
     private TurnStatus _turnStatus;
     private Mouse mouse;
-    // Tasks
+    private TurnUpdateEventArgs _currentturn;
+    private VoteUpdateEventArgs _currentvote;
+    private WebProxy? _proxy;
+    // Tasks and related
     private TaskCompletionSource<Node[]> GotNodeList;
     private TaskCompletionSource<bool> GotConnectionToNode;
     private TaskCompletionSource<int> GotTurn;
     private TaskCompletionSource<Rank> GotStaff;
     private List<GetIPTask> GotIPTasks;
+    private SemaphoreSlim QEMUMonitorSemaphore;
+    private TaskCompletionSource<string> QEMUMonitorResult;
     // Properties
     public Rank Rank { get { return this._rank; } }
     public Permissions Permissions { get { return this._perms; } }
@@ -48,6 +53,9 @@ public class CollabVMClient {
     public bool ConnectedToVM { get { return this._connectedToVM; } }
     public User[] Users => _users.ToArray();
     public TurnStatus TurnStatus { get { return this._turnStatus; } }
+    public VoteUpdateEventArgs CurrentVote { get { return this._currentvote; } }
+    public TurnUpdateEventArgs CurrentTurn { get { return this._currentturn; } }
+    public string Node { get { return this.node; } }
     // Events
     public event EventHandler<ChatMessage> Chat;
     public event EventHandler<ChatMessage[]> ChatHistory;
@@ -88,19 +96,32 @@ public class CollabVMClient {
         this.socket.Options.AddSubProtocol("guacamole");
         this.socket.Options.SetRequestHeader("Origin", "https://computernewb.com");
         if (proxy != null) {
-            this.socket.Options.Proxy = new WebProxy(proxy);
+            this._proxy = new WebProxy(proxy);
+            this.socket.Options.Proxy = this._proxy;
         }
         this.NOPRecieve = new(10000);
         this.NOPRecieve.AutoReset = false;
         this.NOPRecieve.Elapsed += delegate { this.Disconnect(); };
         this._users = new();
+        this._currentturn = new TurnUpdateEventArgs {
+            Queue = Array.Empty<User>(),
+            TurnTimer = 0,
+            QueueTimer = 0,
+        };
+        this._currentvote = new VoteUpdateEventArgs {
+            No = 0,
+            Yes = 0,
+            Status = VoteStatus.None
+        };
         this.mouse = new();
         this.GotNodeList = new();
         this.GotConnectionToNode = new();
         this.GotTurn = new();
         this.GotStaff = new();
         this.GotIPTasks = new();
-        // Assign empty handlers
+        this.QEMUMonitorResult = new();
+        this.QEMUMonitorSemaphore = new(1, 1);
+        // Assign empty handlers to prevent exception
         Chat += delegate { };
         ChatHistory += delegate { };
         ConnectedToNode += delegate { };
@@ -292,15 +313,23 @@ public class CollabVMClient {
             case "vote": {
                 switch (msgArr[1]) {
                     case "0":
+                        if (msgArr.Length < 4) return;
+                        goto case "1";
                     case "1":
-                        this.VoteUpdate.Invoke(this, new VoteUpdateEventArgs {
+                        this._currentvote = new VoteUpdateEventArgs {
                             No = int.Parse(msgArr[4]),
                             Yes = int.Parse(msgArr[3]),
                             Status = msgArr[1] switch {"0" => VoteStatus.Started, "1" => VoteStatus.Update},
                             TimeToVoteEnd = int.Parse(msgArr[2])
-                        });
+                        };
+                        this.VoteUpdate.Invoke(this, this._currentvote);
                         break;
                     case "2":
+                        this._currentvote = new VoteUpdateEventArgs {
+                            Yes = 0,
+                            No = 0,
+                            Status = VoteStatus.None,
+                        };
                         this.VoteEnded.Invoke(this, EventArgs.Empty);
                         break;
                     case "3":
@@ -316,11 +345,12 @@ public class CollabVMClient {
                 this._turnStatus = TurnStatus.None;
                 int queuedUsers = int.Parse(msgArr[2]);
                 if (queuedUsers == 0) {
-                    this.TurnUpdate.Invoke(this, new TurnUpdateEventArgs {
+                    this._currentturn = new TurnUpdateEventArgs {
                         Queue = Array.Empty<User>(),
+                        QueueTimer = null,
                         TurnTimer = null,
-                        QueueTimer = null
-                    });
+                    };
+                    TurnUpdate.Invoke(this, this._currentturn);
                     return;
                 }
                 var currentTurnUser = _users.First(u => u.Username == msgArr[3]);
@@ -339,11 +369,13 @@ public class CollabVMClient {
                         queue.Add(user);
                     }
                 }
-                this.TurnUpdate.Invoke(this, new TurnUpdateEventArgs {
+
+                this._currentturn = new TurnUpdateEventArgs {
                     Queue = queue.ToArray(),
                     TurnTimer = (this._turnStatus == TurnStatus.HasTurn) ? int.Parse(msgArr[1]) : null,
-                    QueueTimer = (this._turnStatus == TurnStatus.Waiting) ? int.Parse(msgArr[msgArr.Length-1]) : null,
-                });
+                    QueueTimer = (this._turnStatus == TurnStatus.Waiting) ? int.Parse(msgArr[msgArr.Length - 1]) : null,
+                };
+                this.TurnUpdate.Invoke(this, this._currentturn );
                 break;
             }
             case "admin": {
@@ -366,6 +398,9 @@ public class CollabVMClient {
                         }
                         break;
                     }
+                    case "2":
+                        this.QEMUMonitorResult.TrySetResult(msgArr[2]);
+                        break;
                     case "19":
                         var tsk = this.GotIPTasks.Find(x => x.username == msgArr[2]);
                         if (tsk == null) return;
@@ -380,9 +415,9 @@ public class CollabVMClient {
     /// Close the connection to the server
     /// </summary>
     public async Task Disconnect() {
-        this._connected = false;
         if (this.socket.State == WebSocketState.Open)
             await this.SendMsg("10.disconnect;");
+        this._connected = false;
         await this.socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
         this.Cleanup();
         return;
@@ -396,6 +431,12 @@ public class CollabVMClient {
         this._perms = Permissions.None;
         this.NOPRecieve.Stop();
         this.NOPRecieve.Interval = 10000;
+        this.socket = new();
+        this.socket.Options.AddSubProtocol("guacamole");
+        this.socket.Options.SetRequestHeader("Origin", "https://computernewb.com");
+        if (_proxy != null) {
+            this.socket.Options.Proxy = this._proxy;
+        }
         if (fireDisconnect)
             this.ConnectionClosed.Invoke(this, EventArgs.Empty);
     }
@@ -558,6 +599,18 @@ public class CollabVMClient {
     /// </summary>
     /// <param name="msg">Message to send</param>`
     public Task SendChat(string msg) => this.SendMsg(Guacutils.Encode("chat", msg));
+    /// <summary>
+    /// Send an XSS (Not HTML sanitized) message to the VM chat
+    /// </summary>
+    /// <param name="msg">Message to send</param>
+    public async Task SendXSSChat(string msg) {
+        if (!this._perms.XSS)
+            throw new NoPermissionException("Send XSS Message");
+        if (!this.ConnectedToVM)
+            throw new NotConnectedToNodeException("Send XSS Message");
+        await this.SendMsg(Guacutils.Encode("admin", "21", msg));
+        return;
+    }
 
     /// <summary>
     /// Restore the VM
@@ -570,6 +623,9 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "8", this.node));
     }
     
+    /// <summary>
+    /// Reboot the VM
+    /// </summary>
     public async Task Reboot() {
         if (!this._perms.Reboot)
             throw new NoPermissionException("Reboot VM");
@@ -578,6 +634,9 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "10", this.node));
     }
     
+    /// <summary>
+    /// Clear the VM Turn Queue
+    /// </summary>
     public async Task ClearTurnQueue() {
         if (!this._perms.BypassAndEndTurns)
             throw new NoPermissionException("Clear the turn queue");
@@ -586,6 +645,9 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "17", this.node));
     }
     
+    /// <summary>
+    /// Steal the turn from the current user
+    /// </summary>
     public async Task BypassTurn() {
         if (!this._perms.BypassAndEndTurns)
             throw new NoPermissionException("Bypass Turn");
@@ -594,6 +656,10 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "20"));
     }
     
+    /// <summary>
+    /// End a user's turn or remove them from the queue
+    /// </summary>
+    /// <param name="user">Username to remove</param>
     public async Task EndTurn(string user) {
         if (!this._perms.BypassAndEndTurns)
             throw new NoPermissionException("End Turn");
@@ -602,6 +668,10 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "16", user));
     }
     
+    /// <summary>
+    /// Ban a user from the VM
+    /// </summary>
+    /// <param name="user">Username to ban</param>
     public async Task Ban(string user) {
         if (!this._perms.Ban)
             throw new NoPermissionException("Ban");
@@ -609,7 +679,10 @@ public class CollabVMClient {
             throw new NotConnectedToNodeException("Ban");
         await this.SendMsg(Guacutils.Encode("admin", "12", user));
     }
-    
+    /// <summary>
+    /// Kick a user from the VM
+    /// </summary>
+    /// <param name="user">Username to kick</param>
     public async Task Kick(string user) {
         if (!this._perms.Kick)
             throw new NoPermissionException("Kick");
@@ -618,6 +691,11 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "15", user));
     }
     
+    /// <summary>
+    /// Rename a user
+    /// </summary>
+    /// <param name="user">The user to rename</param>
+    /// <param name="newname">New username</param>
     public async Task RenameUser(string user, string newname) {
         if (!this._perms.Rename)
             throw new NoPermissionException("Rename user");
@@ -626,6 +704,11 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "18", user, newname));
     }
     
+    /// <summary>
+    /// Mute a user, preventing them from chatting or taking turns
+    /// </summary>
+    /// <param name="user">User to mute</param>
+    /// <param name="permanent">True to permanently mute, false to mute temporarily (30 seconds by default)</param>
     public async Task MuteUser(string user, bool permanent) {
         if (!this._perms.Mute)
             throw new NoPermissionException("Mute user");
@@ -634,6 +717,11 @@ public class CollabVMClient {
         await this.SendMsg(Guacutils.Encode("admin", "14", user, permanent ? "1" : "0"));
     }
     
+    /// <summary>
+    /// Get a user's IP address
+    /// </summary>
+    /// <param name="user">User to get the IP from</param>
+    /// <returns>The user's IP address</returns>
     public async Task<string> GetIP(string user) {
         if (!this._perms.GetIP)
             throw new NoPermissionException("Get IP");
@@ -647,6 +735,64 @@ public class CollabVMClient {
         this.SendMsg(Guacutils.Encode("admin", "19", user));
         return await tsk.IPTask.Task;
     }
+
+    /// <summary>
+    /// Send a command to the QEMU monitor of the VM
+    /// </summary>
+    /// <param name="cmd">Monitor command to send</param>
+    /// <returns>Response from QEMU</returns>
+    public async Task<string> QEMUMonitor(string cmd) {
+        if (this._rank != Rank.Admin)
+            throw new NoPermissionException("Run QEMU Monitor Command");
+        if (!this._connectedToVM)
+            throw new NotConnectedToNodeException("Run QEMU Monitor Command");
+        await this.QEMUMonitorSemaphore.WaitAsync();
+        this.QEMUMonitorResult = new();
+        this.SendMsg(Guacutils.Encode("admin", "5", this.node, cmd));
+        string result = await this.QEMUMonitorResult.Task;
+        this.QEMUMonitorSemaphore.Release(1);
+        return result;
+    }
+
+    /// <summary>
+    /// Force end a vote reset
+    /// </summary>
+    /// <param name="reset">True to reset the VM, false to cancel the vote</param>
+    public async Task ForceVote(bool reset) {
+        if (!this._perms.ForceVote)
+            throw new NoPermissionException("Force Vote");
+        if (!this._connectedToVM)
+            throw new NotConnectedToNodeException("Force Vote");
+        await this.SendMsg(Guacutils.Encode("admin", "13", reset ? "1" : "0"));
+    }
+
+    /// <summary>
+    /// Toggle turns on or off
+    /// </summary>
+    /// <param name="status">True to enable turns, false to restrict them to staff</param>
+    public async Task ToggleTurns(bool status) {
+        if (this._rank != Rank.Admin)
+            throw new NoPermissionException("Toggle Turns");
+        if (!this.ConnectedToVM)
+            throw new NotConnectedToNodeException("Toggle Turns");
+        await this.SendMsg(Guacutils.Encode("admin", "22", status ? "1" : "0"));
+    }
+    
+    /// <summary>
+    /// Take an indefinite turn. Can be ended by calling Turn(false)
+    /// </summary>
+    /// <exception cref="NoPermissionException"></exception>
+    /// <exception cref="NotConnectedToNodeException"></exception>
+    public async Task IndefiniteTurn() {
+        if (this._rank != Rank.Admin)
+            throw new NoPermissionException("Take Indefinite Turn");
+        if (!this.ConnectedToVM)
+            throw new NotConnectedToNodeException("Take Indefinite Turn");
+        await this.SendMsg(Guacutils.Encode("admin", "23"));
+    }
+
+    public Image GetFramebuffer() => framebuffer.CloneAs<Rgba32>();
     
     private Task sendMouse() => this.SendMsg(Guacutils.Encode("mouse", mouse.X.ToString(), mouse.Y.ToString(), mouse.MakeMask().ToString()));
+    
 } 

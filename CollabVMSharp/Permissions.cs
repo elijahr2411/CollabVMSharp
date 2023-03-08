@@ -41,7 +41,7 @@ public class Permissions {
 }
 
 public enum Rank {
-    Unregistered,
-    Moderator,
-    Admin
+    Unregistered = 0,
+    Moderator = 3,
+    Admin = 2
 }
