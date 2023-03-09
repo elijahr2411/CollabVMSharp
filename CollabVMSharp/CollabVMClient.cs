@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Security.Authentication;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using SixLabors.ImageSharp;
@@ -38,6 +39,7 @@ public class CollabVMClient {
     private TurnUpdateEventArgs _currentturn;
     private VoteUpdateEventArgs _currentvote;
     private WebProxy? _proxy;
+    private Dictionary<string, Action<string, IEnumerable<string>>> commands;
     // Tasks and related
     private TaskCompletionSource<Node[]> GotNodeList;
     private TaskCompletionSource<bool> GotConnectionToNode;
@@ -87,6 +89,7 @@ public class CollabVMClient {
         }
         this.username = username;
         this.node = node;
+        this.commands = new();
         this._rank = Rank.Unregistered;
         this._perms = Permissions.None;
         this._connected = false;
@@ -224,7 +227,11 @@ public class CollabVMClient {
                     }
                     ChatHistory.Invoke(this, msgs.ToArray());
                     // I should probably add a config option for whether or not the message should be HTML encoded
-                } else Chat.Invoke(this, new ChatMessage {Username = msgArr[1], Message = WebUtility.HtmlDecode(msgArr[2])});
+                }
+                else {
+                    Chat.Invoke(this, new ChatMessage { Username = msgArr[1], Message = WebUtility.HtmlDecode(msgArr[2]) });
+                    this.ProcessCommand(msgArr[1], WebUtility.HtmlDecode(msgArr[2]));
+                }
                 break;
             }
             case "captcha": {
@@ -789,6 +796,29 @@ public class CollabVMClient {
         if (!this.ConnectedToVM)
             throw new NotConnectedToNodeException("Take Indefinite Turn");
         await this.SendMsg(Guacutils.Encode("admin", "23"));
+    }
+
+    /// <summary>
+    /// Register a command for users on the VM to run
+    /// </summary>
+    /// <param name="cmd">The command which triggers the callback. For example, "!ban" would match "!ban guest12345"</param>
+    /// <param name="callback">Function to be called when a user executes the command. The first parameter is a username and the last is an array of arguments</param>
+    public void RegisterCommand(string cmd, Action<string, IEnumerable<string>> callback) {
+        this.commands.Add(cmd, callback);
+    }
+
+    private void ProcessCommand(string username, string cmd) {
+        // I stole this from stackoverflow
+        var re = new Regex("(?<=\")[^\"]*(?=\")|[^\" ]+");
+        string[] args;
+        try {
+            args = re.Matches(cmd).Cast<Match>().Select(m => m.Value).ToArray();
+        }
+        catch {
+            return;
+        }
+        if (commands.ContainsKey(args[0]))
+            commands[args[0]](username, args.Skip(1));
     }
 
     public Image GetFramebuffer() => framebuffer.CloneAs<Rgba32>();
