@@ -2,7 +2,10 @@
 
 CollabVM client library in C#.
 
-## Usage Example
+## Usage
+The API is well documented with XML documentation, meaning hovering over a method or property in Visual Studio or another IDE should give a pretty good idea of how to do things. For a basic usage example, see below
+
+### Example
 
 ```cs
 using CollabVMSharp;
