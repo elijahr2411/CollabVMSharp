@@ -8,7 +8,7 @@ The API is well documented with XML documentation, meaning hovering over a metho
 ### Example
 
 ```cs
-using System.Console;
+using System;
 using CollabVMSharp;
 // Instantiate the client
 var cvm = new CollabVMClient("wss://computernewb.com/collab-vm/vm0", "cvmsharptest", "vm0b0t");
