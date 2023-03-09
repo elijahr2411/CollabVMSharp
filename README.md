@@ -16,6 +16,10 @@ var cvm = new CollabVMClient("wss://computernewb.com/collab-vm/vm0", "cvmsharpte
 await cvm.Connect();
 // Send a chat
 await cvm.SendChat("What hath god wrought?");
+// Add a command
+cvm.RegisterCommand("!test", (username, args) => {
+    Console.WriteLine($"You said {String.Join(", ", args)}, {username}!");
+});
 // Queue a turn, wait until we get the turn
 await cvm.GetTurn();
 // Type a string into the VM
