@@ -39,7 +39,7 @@ public class CollabVMClient {
     private TurnUpdateEventArgs _currentturn;
     private VoteUpdateEventArgs _currentvote;
     private WebProxy? _proxy;
-    private Dictionary<string, Action<string, IEnumerable<string>>> commands;
+    private Dictionary<string, Action<string, string[]>> commands;
     // Tasks and related
     private TaskCompletionSource<Node[]> GotNodeList;
     private TaskCompletionSource<bool> GotConnectionToNode;
@@ -63,6 +63,7 @@ public class CollabVMClient {
     public event EventHandler<ChatMessage[]> ChatHistory;
     public event EventHandler ConnectedToNode;
     public event EventHandler NodeConnectFailed;
+    public event EventHandler<string> ConnectionFailed;
     public event EventHandler<RectEventArgs> Rect;
     public event EventHandler<string> Renamed;
     public event EventHandler<UserRenamedEventArgs> UserRenamed;
@@ -129,6 +130,7 @@ public class CollabVMClient {
         ChatHistory += delegate { };
         ConnectedToNode += delegate { };
         NodeConnectFailed += delegate { };
+        ConnectionFailed += delegate { };
         Rect += delegate { };
         Renamed += delegate { };
         UserRenamed += delegate { };
@@ -143,8 +145,15 @@ public class CollabVMClient {
     /// <summary>
     /// Connect to the CollabVM Server
     /// </summary>
-    public async Task Connect() {
-        await this.socket.ConnectAsync(this.url, CancellationToken.None);
+    public async Task<bool> Connect() {
+        try {
+            await this.socket.ConnectAsync(this.url, CancellationToken.None);
+        }
+        catch (WebSocketException e) {
+            this.ConnectionFailed.Invoke(this, e.Message);
+            this.Cleanup(false);
+            return false;
+        }
         this._connected = true;
         if (this.username != null)
             this.SendMsg(Guacutils.Encode("rename", this.username));
@@ -154,6 +163,7 @@ public class CollabVMClient {
             this.SendMsg(Guacutils.Encode("connect", this.node));
         this.NOPRecieve.Start();
         this.WebSocketLoop();
+        return true;
     }
 
     private async void WebSocketLoop() {
@@ -803,7 +813,7 @@ public class CollabVMClient {
     /// </summary>
     /// <param name="cmd">The command which triggers the callback. For example, "!ban" would match "!ban guest12345"</param>
     /// <param name="callback">Function to be called when a user executes the command. The first parameter is a username and the last is an array of arguments</param>
-    public void RegisterCommand(string cmd, Action<string, IEnumerable<string>> callback) {
+    public void RegisterCommand(string cmd, Action<string, string[]> callback) {
         this.commands.Add(cmd, callback);
     }
 
@@ -818,7 +828,7 @@ public class CollabVMClient {
             return;
         }
         if (commands.ContainsKey(args[0]))
-            commands[args[0]](username, args.Skip(1));
+            commands[args[0]](username, args.Skip(1).ToArray());
     }
 
     public Image GetFramebuffer() => framebuffer.CloneAs<Rgba32>();
