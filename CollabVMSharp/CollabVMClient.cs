@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Numerics;
 using System.Security.Authentication;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -65,6 +66,7 @@ public class CollabVMClient {
     public event EventHandler NodeConnectFailed;
     public event EventHandler<string> ConnectionFailed;
     public event EventHandler<RectEventArgs> Rect;
+    public event EventHandler<ScreenSizeEventArgs> ScreenSize;
     public event EventHandler<string> Renamed;
     public event EventHandler<UserRenamedEventArgs> UserRenamed;
     public event EventHandler<User> UserJoined;
@@ -132,6 +134,7 @@ public class CollabVMClient {
         NodeConnectFailed += delegate { };
         ConnectionFailed += delegate { };
         Rect += delegate { };
+        ScreenSize += delegate { };
         Renamed += delegate { };
         UserRenamed += delegate { };
         UserJoined += delegate { };
@@ -262,7 +265,10 @@ public class CollabVMClient {
             }
             case "size": {
                 if (msgArr[1] != "0") return;
-                this.framebuffer = new Image<Rgba32>(int.Parse(msgArr[2]), int.Parse(msgArr[3]));
+                var width = int.Parse(msgArr[2]);
+                var height = int.Parse(msgArr[3]);
+                this.framebuffer = new Image<Rgba32>(width, height);
+                this.ScreenSize.Invoke(this, new ScreenSizeEventArgs { Width = width, Height = height });
                 break;
             }
             case "png": {

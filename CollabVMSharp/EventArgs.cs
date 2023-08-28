@@ -48,6 +48,12 @@ public class RectEventArgs {
     public Image Data { get; set; }
 }
 
+public class ScreenSizeEventArgs
+{
+    public int Width { get; set; }
+    public int Height { get; set; }
+}
+
 // this might not be the best place for this IDK
 public enum VoteStatus {
     Started,
