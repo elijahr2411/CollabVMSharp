@@ -1,20 +1,19 @@
 ﻿#nullable enable
 #pragma warning disable CS4014
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
-using System.Numerics;
 using System.Security.Authentication;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using Timer = System.Timers.Timer;
 // ReSharper disable FieldCanBeMadeReadOnly.Local
 // ReSharper disable ArrangeObjectCreationWhenTypeNotEvident
@@ -64,7 +63,6 @@ public class CollabVMClient {
     public event EventHandler<ChatMessage[]> ChatHistory;
     public event EventHandler ConnectedToNode;
     public event EventHandler NodeConnectFailed;
-    public event EventHandler<string> ConnectionFailed;
     public event EventHandler<RectEventArgs> Rect;
     public event EventHandler<ScreenSizeEventArgs> ScreenSize;
     public event EventHandler<string> Renamed;
@@ -132,7 +130,6 @@ public class CollabVMClient {
         ChatHistory += delegate { };
         ConnectedToNode += delegate { };
         NodeConnectFailed += delegate { };
-        ConnectionFailed += delegate { };
         Rect += delegate { };
         ScreenSize += delegate { };
         Renamed += delegate { };
@@ -148,14 +145,13 @@ public class CollabVMClient {
     /// <summary>
     /// Connect to the CollabVM Server
     /// </summary>
-    public async Task<bool> Connect() {
+    public async Task Connect() {
         try {
             await this.socket.ConnectAsync(this.url, CancellationToken.None);
         }
         catch (WebSocketException e) {
-            this.ConnectionFailed.Invoke(this, e.Message);
             this.Cleanup(false);
-            return false;
+            throw e;
         }
         this._connected = true;
         if (this.username != null)
@@ -166,7 +162,7 @@ public class CollabVMClient {
             this.SendMsg(Guacutils.Encode("connect", this.node));
         this.NOPRecieve.Start();
         this.WebSocketLoop();
-        return true;
+        return;
     }
 
     private async void WebSocketLoop() {
