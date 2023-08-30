@@ -49,7 +49,7 @@ public class CollabVMClient {
     private SemaphoreSlim QEMUMonitorSemaphore;
     private TaskCompletionSource<string> QEMUMonitorResult;
     // Properties
-    public Rank Rank { get { return this._rank; } }
+    public Rank Rank { get { return _rank; } }
     public Permissions Permissions { get { return this._perms; } }
     public bool Connected { get { return this._connected; } }
     public bool ConnectedToVM { get { return this._connectedToVM; } }
@@ -58,6 +58,8 @@ public class CollabVMClient {
     public VoteUpdateEventArgs CurrentVote { get { return this._currentvote; } }
     public TurnUpdateEventArgs CurrentTurn { get { return this._currentturn; } }
     public string Node { get { return this.node; } }
+
+    public string Username { get { return this.username; } }
     // Events
     public event EventHandler<ChatMessage> Chat;
     public event EventHandler<ChatMessage[]> ChatHistory;
