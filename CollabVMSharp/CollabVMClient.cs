@@ -821,6 +821,16 @@ public class CollabVMClient {
         this.commands.Add(cmd, callback);
     }
 
+    /// <summary>
+    /// Change client username
+    /// </summary>
+    /// <param name="newname">New username. Null for the server to assign a guest name</param>
+    public void Rename(string? newname = null)
+    {
+        if (newname == null) SendMsg(Guacutils.Encode("rename"));
+        else SendMsg(Guacutils.Encode("rename", newname));
+    } 
+
     private void ProcessCommand(string username, string cmd) {
         // I stole this from stackoverflow
         var re = new Regex("(?<=\")[^\"]*(?=\")|[^\" ]+");
